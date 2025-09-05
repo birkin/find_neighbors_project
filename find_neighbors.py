@@ -3,7 +3,20 @@
 # dependencies = []
 # ///
 
-## Find two terms within N words of each other in a text file (case-insensitive)
+"""
+Finds occurrences of two terms within N words of each other in a text file (case-insensitive).
+The returned snippets highlight the first and second term with ||| markers.
+
+Returns a JSON-serializable dictionary with the following shape:
+    {
+        "count": int,
+        "matches": [
+            {"snippet": str},
+            ...
+        ]
+    }
+"""
+
 import argparse
 import re
 import sys
@@ -50,7 +63,9 @@ def find_neighbors_in_text(text: str, term1: str, term2: str, nearness: int) -> 
     nearness = max(int(nearness), 0)
     pattern: re.Pattern = build_pattern(term1, term2, nearness)
 
-    def extract_context(src: str, first_start: int, second_end: int, pre_words: int = 10, post_words: int = 10) -> tuple[str, str, str]:
+    def extract_context(
+        src: str, first_start: int, second_end: int, pre_words: int = 10, post_words: int = 10
+    ) -> tuple[str, str, str]:
         tokens: list[re.Match] = list(re.finditer(r'\w+', src))
 
         # Pre-context: last `pre_words` tokens ending before or at first_start
@@ -60,7 +75,9 @@ def find_neighbors_in_text(text: str, term1: str, term2: str, nearness: int) -> 
                 pre_last_idx = i
             else:
                 break
-        pre_tokens: list[re.Match] = tokens[max(0, pre_last_idx - pre_words + 1): pre_last_idx + 1] if pre_last_idx >= 0 else []
+        pre_tokens: list[re.Match] = (
+            tokens[max(0, pre_last_idx - pre_words + 1) : pre_last_idx + 1] if pre_last_idx >= 0 else []
+        )
         pre: str = ' '.join(t.group(0) for t in pre_tokens)
 
         # Post-context: first `post_words` tokens starting at or after second_end
@@ -69,7 +86,9 @@ def find_neighbors_in_text(text: str, term1: str, term2: str, nearness: int) -> 
             if tm.start() >= second_end:
                 post_start_idx = i
                 break
-        post_tokens: list[re.Match] = tokens[post_start_idx: post_start_idx + post_words] if post_start_idx is not None else []
+        post_tokens: list[re.Match] = (
+            tokens[post_start_idx : post_start_idx + post_words] if post_start_idx is not None else []
+        )
         post: str = ' '.join(t.group(0) for t in post_tokens)
 
         # Core slice between the first and second matched spans (raw, without highlighting)
@@ -77,7 +96,9 @@ def find_neighbors_in_text(text: str, term1: str, term2: str, nearness: int) -> 
 
         return pre, core_src, post
 
-    def massage_highlight(core: str, first_abs_span: tuple[int, int], second_abs_span: tuple[int, int], core_abs_start: int) -> str:
+    def massage_highlight(
+        core: str, first_abs_span: tuple[int, int], second_abs_span: tuple[int, int], core_abs_start: int
+    ) -> str:
         """Add ||| markers around the first and second matched terms inside the provided core.
         Expands the first term to include trailing word characters to capture full tokens (e.g., mysqldump).
         `core_abs_start` is the absolute position in the full text where `core` begins.
@@ -103,9 +124,13 @@ def find_neighbors_in_text(text: str, term1: str, term2: str, nearness: int) -> 
         # Insert markers in textual order: first term then second term
         highlighted = (
             core[:rel1_start]
-            + "|||" + core[rel1_start:rel1_end] + "|||"
+            + '|||'
+            + core[rel1_start:rel1_end]
+            + '|||'
             + core[rel1_end:rel2_start]
-            + "|||" + core[rel2_start:rel2_end] + "|||"
+            + '|||'
+            + core[rel2_start:rel2_end]
+            + '|||'
             + core[rel2_end:]
         )
         return highlighted
@@ -132,10 +157,10 @@ def find_neighbors_in_text(text: str, term1: str, term2: str, nearness: int) -> 
 
         highlighted_core = massage_highlight(core_src, first_span, second_span, first_start)
         core: str = highlighted_core.replace('\n', ' ')
-        snippet: str = f"{pre} {core} {post}".strip()
-        results.append({"snippet": snippet})
+        snippet: str = f'{pre} {core} {post}'.strip()
+        results.append({'snippet': snippet})
 
-    return {"count": len(results), "matches": results}
+    return {'count': len(results), 'matches': results}
 
 
 def parse_args() -> argparse.Namespace:
@@ -189,7 +214,7 @@ def main() -> int:
         nearness=args.nearness,
     )
 
-    print(f"found {result['count']} match(es)")
+    print(f'found {result["count"]} match(es)')
     for item in result.get('matches', []):
         snippet = item.get('snippet', '')
         print()
