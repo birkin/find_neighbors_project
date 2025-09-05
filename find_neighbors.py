@@ -1,5 +1,26 @@
-#!/usr/bin/env python3
-## finds neighbors of two terms within N words and prints highlighted snippets
+# /// script
+# requires-python = "==3.12.*"
+# dependencies = []
+# ///
+
+"""
+Finds occurrences of two terms within N words of each other in a text file (case-insensitive).
+The returned snippets highlight the first and second term with ||| markers.
+
+Usage:
+    find_neighbors.py --filepath <filepath> --term1 <term1> --term2 <term2> --nearness <nearness>   --pre-words <pre_words> --post-words <post_words> --json
+
+Returns a JSON-serializable dictionary with the following shape:
+    {
+        "count": int,
+        "matches": [
+            {"snippet": str},
+            ...
+        ]
+    }
+
+
+"""
 
 from __future__ import annotations
 
@@ -53,6 +74,34 @@ def _slice_context(
     pre_words: int,
     post_words: int,
 ) -> tuple[str, str, str]:
+    """
+    Returns token-based context around a given span in the original text.
+
+    Given the full `text`, a precomputed list of `token_matches` produced by
+    `re.finditer(r'\S+', text, re.DOTALL)`, and a half-open character span
+    `[first_start, second_end)`, this function slices and returns three strings:
+
+    - pre: up to `pre_words` tokens immediately preceding the token that
+      contains `first_start`.
+    - core: the exact substring `text[first_start:second_end]` (newlines
+      preserved as-is).
+    - post: up to `post_words` tokens starting at or after `second_end`.
+
+    Edge cases:
+    - If `first_start` falls before the first token, `pre` will be empty.
+    - If no token begins at or after `second_end`, `post` will be empty.
+
+    Parameters:
+      text: The full source text used to compute `token_matches`.
+      token_matches: List of regex Match objects for `\S+` tokens over `text`.
+      first_start: Start index (inclusive) of the earlier term span.
+      second_end: End index (exclusive) of the later term span.
+      pre_words: Maximum number of tokens to include before the first span.
+      post_words: Maximum number of tokens to include after the second span.
+
+    Returns:
+      A tuple `(pre, core, post)` as described above.
+    """
     # find token index containing first_start
     first_token_idx = 0
     for i, tm in enumerate(token_matches):
@@ -76,7 +125,6 @@ def _slice_context(
     return pre, core, post
 
 
-## core search routine: returns snippets with exactly the two matched substrings highlighted
 def find_neighbors_in_text(
     text: str,
     term1: str,
@@ -85,6 +133,10 @@ def find_neighbors_in_text(
     pre_words: int = DEFAULT_PRE_WORDS,
     post_words: int = DEFAULT_POST_WORDS,
 ) -> ResultDict:
+    """
+    Finds occurrences of two terms within N words of each other in a text file (case-insensitive).
+    The returned snippets highlight the first and second term with ||| markers.
+    """
     pat = build_pattern(term1, term2, nearness)
     results: list[MatchDict] = []
 
@@ -125,16 +177,20 @@ def find_neighbors_in_text(
     return {'count': len(results), 'matches': results}
 
 
-## io helpers
 def _read_text_from_path_or_stdin(filepath: str | None) -> str:
+    """
+    Reads text from a file or stdin.
+    """
     if not filepath or filepath == '-':
         return sys.stdin.read()
     p = Path(filepath)
     return p.read_text(encoding='utf-8')
 
 
-## cli
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """
+    Parse command-line arguments.
+    """
     parser = argparse.ArgumentParser(
         prog='find_neighbors',
         description='find occurrences of two terms within N words, highlight them, and print context',
@@ -182,6 +238,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """
+    Main controller.
+    """
     args = parse_args(argv)
     text = _read_text_from_path_or_stdin(args.filepath)
 
