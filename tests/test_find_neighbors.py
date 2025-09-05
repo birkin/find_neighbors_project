@@ -129,7 +129,7 @@ class FindNeighborsContractTests(unittest.TestCase):
             self.assertIn('mysql', snippet_lower)
             self.assertIn('utf8', snippet_lower)
         self.assertEqual(
-            'ago our fathers brought forth on this continent a new |||mysqldump||| --user the_username --password --host=the_host --add-drop-table --enable-cleartext-plugin --default-character-set=|||utf8||| skip lock tables no tablespaces the_db_name the_output_file sql of the',
+            'ago our fathers brought forth on this continent, a new... |||mysql|||dump --user the_username --password --host=the_host --add-drop-table --enable-cleartext-plugin --default-character-set=|||utf8||| --skip-lock-tables --no-tablespaces the_db_name > ~/the_output_file.sql ...of the people, by the',
             matches[0]['snippet'],
         )
 
