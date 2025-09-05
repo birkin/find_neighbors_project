@@ -16,7 +16,12 @@ def build_pattern(term1: str, term2: str, nearness: int) -> re.Pattern:
     # Escape terms to ensure literal matching in regex
     term1: str = re.escape(term1)
     term2: str = re.escape(term2)
-    between: str = rf'(?:\W+\w+){{0,{nearness}}}?\W*'
+    # Count nearness by whitespace-separated tokens (\S+) rather than \w words.
+    # Allow the term to appear as a substring within a token by:
+    # - consuming the remainder of the current token after term1 (\S*)
+    # - then up to N whitespace+token groups
+    # - then optional whitespace and the beginning of the next token before term2 (\S*)
+    between: str = rf'\S*(?:\s+\S+){{0,{nearness}}}?\s*\S*'
     # Named groups allow us to determine which term appears first in the match
     pattern_str: str = (
         rf'(?:'

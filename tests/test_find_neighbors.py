@@ -95,6 +95,33 @@ class FindNeighborsContractTests(unittest.TestCase):
         # We expect zero or very few; in this sample, 0 is the strict expectation
         self.assertEqual(result["count"], 0)
 
+    def test_mysql_utf8_nearness(self):
+        if find_neighbors_in_text is None:
+            self.skipTest("`find_neighbors_in_text` not implemented yet")
+
+        text = (
+            "Four score and seven years ago our fathers brought forth on this continent, a new... "
+            "./mysqldump --user the_username --password --host=the_host --add-drop-table "
+            "--enable-cleartext-plugin --default-character-set=utf8mb4 --skip-lock-tables "
+            "--no-tablespaces the_db_name > ~/the_output_file.sql "
+            "...of the people, by the people, for the people, shall not perish from the earth."
+        )
+        term1 = "mysql"
+        term2 = "utf8"
+        nearness = 25
+
+        result = find_neighbors_in_text(text, term1, term2, nearness)
+        self.assertIsInstance(result, dict)
+        self.assertIn("count", result)
+        self.assertIn("matches", result)
+        self.assertGreaterEqual(result["count"], 1)
+        for m in result["matches"]:
+            self.assertIsInstance(m, dict)
+            self.assertIn("snippet", m)
+            snippet_lower = m["snippet"].lower()
+            self.assertIn("mysql", snippet_lower)
+            self.assertIn("utf8", snippet_lower)
+
 
 if __name__ == "__main__":
     unittest.main()
