@@ -7,14 +7,13 @@ A small utility to find occurrences of two terms within N words of each other in
 Use Python's built-in unittest via `uv`:
 
 ```bash
-uv run -m unittest -v
+uv run -m unittest discover -s tests -v
 ```
 
-or
+- `-m` stands for module but there's no double-dash equivalent
+- `-s` or `--start-directory`
+- `-v` or `--verbose`
 
-```bash
-uv run -m unittest discover -s tests -p 'test_*.py' -v
-```
 
 ## CLI usage
 
