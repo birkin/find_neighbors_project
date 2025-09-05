@@ -1,227 +1,208 @@
-# /// script
-# requires-python = "==3.12.*"
-# dependencies = []
-# ///
+#!/usr/bin/env python3
+## finds neighbors of two terms within N words and prints highlighted snippets
 
-"""
-Finds occurrences of two terms within N words of each other in a text file (case-insensitive).
-The returned snippets highlight the first and second term with ||| markers.
-
-Returns a JSON-serializable dictionary with the following shape:
-    {
-        "count": int,
-        "matches": [
-            {"snippet": str},
-            ...
-        ]
-    }
-"""
+from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
+from typing import TypedDict
 
-DEFAULT_NEARNESS: int = 10
+## constants
+DEFAULT_NEARNESS = 10
+DEFAULT_PRE_WORDS = 10
+DEFAULT_POST_WORDS = 10
 
 
-def build_pattern(term1: str, term2: str, nearness: int) -> re.Pattern:
-    # Escape terms to ensure literal matching in regex
-    term1: str = re.escape(term1)
-    term2: str = re.escape(term2)
-    # Count nearness by whitespace-separated tokens (\S+) rather than \w words.
-    # Allow the term to appear as a substring within a token by:
-    # - consuming the remainder of the current token after term1 (\S*)
-    # - then up to N whitespace+token groups
-    # - then optional whitespace and the beginning of the next token before term2 (\S*)
-    between: str = rf'\S*(?:\s+\S+){{0,{nearness}}}?\s*\S*'
-    # Named groups allow us to determine which term appears first in the match
-    pattern_str: str = (
+## data types
+class MatchDict(TypedDict):
+    snippet: str
+
+
+class ResultDict(TypedDict):
+    count: int
+    matches: list[MatchDict]
+
+
+## builds compiled regex for order-agnostic, substring-allowed match across newlines
+def build_pattern(term1: str, term2: str, nearness: int) -> re.Pattern[str]:
+    t1 = re.escape(term1)
+    t2 = re.escape(term2)
+
+    # between = up to N words in-between, counting by \S+ tokens
+    between = rf'\S*(?:\s+\S+){{0,{nearness}}}?\s*\S*'
+
+    pat = (
         rf'(?:'
-        rf'(?P<a>{term1})(?P<between1>{between})(?P<b>{term2})'
+        rf'(?P<a>{t1})(?P<between1>{between})(?P<b>{t2})'
         rf'|'
-        rf'(?P<b2>{term2})(?P<between2>{between})(?P<a2>{term1})'
+        rf'(?P<b2>{t2})(?P<between2>{between})(?P<a2>{t1})'
         rf')'
     )
-    compiled: re.Pattern = re.compile(pattern_str, re.IGNORECASE)
-    return compiled
+    return re.compile(pat, re.IGNORECASE | re.DOTALL)
 
 
-def find_neighbors_in_text(text: str, term1: str, term2: str, nearness: int) -> dict:
-    """
-    Find occurrences of two terms within N words of each other in the provided text.
+## slices context in tokens around a [first_start, second_end) span
+def _slice_context(
+    text: str,
+    token_matches: list[re.Match[str]],
+    first_start: int,
+    second_end: int,
+    pre_words: int,
+    post_words: int,
+) -> tuple[str, str, str]:
+    # find token index containing first_start
+    first_token_idx = 0
+    for i, tm in enumerate(token_matches):
+        if tm.start() <= first_start < tm.end():
+            first_token_idx = i
+            break
 
-    Returns a JSON-serializable dictionary with the following shape:
-        {
-            "count": int,
-            "matches": [
-                {"snippet": str},
-                ...
-            ]
-        }
-    """
-    nearness = max(int(nearness), 0)
-    pattern: re.Pattern = build_pattern(term1, term2, nearness)
+    pre_tokens = token_matches[max(0, first_token_idx - pre_words) : first_token_idx]
+    pre = ' '.join(t.group(0) for t in pre_tokens)
 
-    def extract_context(
-        src: str, first_start: int, second_end: int, pre_words: int = 10, post_words: int = 10
-    ) -> tuple[str, str, str]:
-        tokens: list[re.Match] = list(re.finditer(r'\w+', src))
+    # find token index starting at/after second_end
+    post_start_idx: int | None = None
+    for i, tm in enumerate(token_matches):
+        if tm.start() >= second_end:
+            post_start_idx = i
+            break
+    post_tokens = token_matches[post_start_idx : post_start_idx + post_words] if post_start_idx is not None else []
+    post = ' '.join(t.group(0) for t in post_tokens)
 
-        # Pre-context: last `pre_words` tokens ending before or at first_start
-        pre_last_idx: int = -1
-        for i, tm in enumerate(tokens):
-            if tm.end() <= first_start:
-                pre_last_idx = i
-            else:
-                break
-        pre_tokens: list[re.Match] = (
-            tokens[max(0, pre_last_idx - pre_words + 1) : pre_last_idx + 1] if pre_last_idx >= 0 else []
-        )
-        pre: str = ' '.join(t.group(0) for t in pre_tokens)
+    core = text[first_start:second_end]
+    return pre, core, post
 
-        # Post-context: first `post_words` tokens starting at or after second_end
-        post_start_idx: int | None = None
-        for i, tm in enumerate(tokens):
-            if tm.start() >= second_end:
-                post_start_idx = i
-                break
-        post_tokens: list[re.Match] = (
-            tokens[post_start_idx : post_start_idx + post_words] if post_start_idx is not None else []
-        )
-        post: str = ' '.join(t.group(0) for t in post_tokens)
 
-        # Core slice between the first and second matched spans (raw, without highlighting)
-        core_src: str = src[first_start:second_end]
+## core search routine: returns snippets with exactly the two matched substrings highlighted
+def find_neighbors_in_text(
+    text: str,
+    term1: str,
+    term2: str,
+    nearness: int = DEFAULT_NEARNESS,
+    pre_words: int = DEFAULT_PRE_WORDS,
+    post_words: int = DEFAULT_POST_WORDS,
+) -> ResultDict:
+    pat = build_pattern(term1, term2, nearness)
+    results: list[MatchDict] = []
 
-        return pre, core_src, post
+    token_matches = list(re.finditer(r'\S+', text, re.DOTALL))
 
-    def massage_highlight(
-        core: str, first_abs_span: tuple[int, int], second_abs_span: tuple[int, int], core_abs_start: int
-    ) -> str:
-        """Add ||| markers around the first and second matched terms inside the provided core.
-        Expands the first term to include trailing word characters to capture full tokens (e.g., mysqldump).
-        `core_abs_start` is the absolute position in the full text where `core` begins.
-        """
-        # Expand only the FIRST matched span to include trailing word chars (alnum/underscore)
-        fs0, fs1 = first_abs_span
-        while fs1 < len(text) and (text[fs1].isalnum() or text[fs1] == '_'):
-            fs1 += 1
-        first_span_expanded = (fs0, fs1)
-
-        # Compute relative indices inside the core
-        rel1_start = first_span_expanded[0] - core_abs_start
-        rel1_end = first_span_expanded[1] - core_abs_start
-        rel2_start = second_abs_span[0] - core_abs_start
-        rel2_end = second_abs_span[1] - core_abs_start
-
-        # Clamp to valid bounds
-        rel1_start = max(rel1_start, 0)
-        rel1_end = max(rel1_end, 0)
-        rel2_start = max(rel2_start, 0)
-        rel2_end = max(rel2_end, 0)
-
-        # Insert markers in textual order: first term then second term
-        highlighted = (
-            core[:rel1_start]
-            + '|||'
-            + core[rel1_start:rel1_end]
-            + '|||'
-            + core[rel1_end:rel2_start]
-            + '|||'
-            + core[rel2_start:rel2_end]
-            + '|||'
-            + core[rel2_end:]
-        )
-        return highlighted
-
-    results: list[dict[str, str]] = []
-    for m in pattern.finditer(text):
-        # Determine which ordering matched and get the span from the first term to the second term
+    for m in pat.finditer(text):
         if m.group('a') is not None:
-            first_start: int = m.start('a')
-            second_end: int = m.end('b')
+            first_start, second_end = m.start('a'), m.end('b')
             span1 = (m.start('a'), m.end('a'))
             span2 = (m.start('b'), m.end('b'))
         else:
-            first_start = m.start('b2')
-            second_end = m.end('a2')
+            first_start, second_end = m.start('b2'), m.end('a2')
             span1 = (m.start('b2'), m.end('b2'))
             span2 = (m.start('a2'), m.end('a2'))
 
-        # Order spans by appearance in the text to determine first/second matched words
-        first_span, second_span = (span1, span2) if span1[0] <= span2[0] else (span2, span1)
+        # order spans by appearance
+        s1, s2 = (span1, span2) if span1[0] <= span2[0] else (span2, span1)
 
-        # Build the raw core and pre/post context first, then pass through a massaging function
-        pre, core_src, post = extract_context(text, first_start, second_end, 10, 10)
+        pre, core_src, post = _slice_context(text, token_matches, first_start, second_end, pre_words, post_words)
 
-        highlighted_core = massage_highlight(core_src, first_span, second_span, first_start)
-        core: str = highlighted_core.replace('\n', ' ')
-        snippet: str = f'{pre} {core} {post}'.strip()
+        # core-relative indices
+        r1 = (s1[0] - first_start, s1[1] - first_start)
+        r2 = (s2[0] - first_start, s2[1] - first_start)
+
+        # insert markers; do earlier span first, then adjust later span by +6
+        c = core_src
+        c = c[: r1[0]] + '|||' + c[r1[0] : r1[1]] + '|||' + c[r1[1] :]
+        shift = 6  # len('|||') * 2
+        r2 = (r2[0] + shift, r2[1] + shift)
+        c = c[: r2[0]] + '|||' + c[r2[0] : r2[1]] + '|||' + c[r2[1] :]
+
+        # normalize newlines in the core only (avoid backslash in f-string expr)
+        clean_core = c.replace('\n', ' ')
+        snippet = f'{pre} {clean_core} {post}'.strip()
+
         results.append({'snippet': snippet})
 
     return {'count': len(results), 'matches': results}
 
 
-def parse_args() -> argparse.Namespace:
-    parser: argparse.ArgumentParser = argparse.ArgumentParser(
-        description='Find occurrences of two terms within N words of each other in a file.'
+## io helpers
+def _read_text_from_path_or_stdin(filepath: str | None) -> str:
+    if not filepath or filepath == '-':
+        return sys.stdin.read()
+    p = Path(filepath)
+    return p.read_text(encoding='utf-8')
+
+
+## cli
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog='find_neighbors',
+        description='find occurrences of two terms within N words, highlight them, and print context',
     )
     parser.add_argument(
         '--filepath',
+        help='path to input file (use "-" for stdin)',
+        required=False,
+        default='-',
+    )
+    parser.add_argument(
+        '--term1',
+        help='first term to search',
         required=True,
-        help='Path to the text file to search',
+    )
+    parser.add_argument(
+        '--term2',
+        help='second term to search',
+        required=True,
     )
     parser.add_argument(
         '--nearness',
         type=int,
         default=DEFAULT_NEARNESS,
-        help=f'Maximum number of words allowed between the two terms (default: {DEFAULT_NEARNESS})',
+        help=f'max words between terms (default: {DEFAULT_NEARNESS})',
     )
     parser.add_argument(
-        '--term1',
-        required=True,
-        help='First term to search for',
+        '--pre-words',
+        type=int,
+        default=DEFAULT_PRE_WORDS,
+        help=f'words of context before first term (default: {DEFAULT_PRE_WORDS})',
     )
     parser.add_argument(
-        '--term2',
-        required=True,
-        help='Second term to search for',
+        '--post-words',
+        type=int,
+        default=DEFAULT_POST_WORDS,
+        help=f'words of context after second term (default: {DEFAULT_POST_WORDS})',
     )
-    args: argparse.Namespace = parser.parse_args()
-    return args
+    parser.add_argument(
+        '--json',
+        action='store_true',
+        help='emit json instead of pretty text',
+    )
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args: argparse.Namespace = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    text = _read_text_from_path_or_stdin(args.filepath)
 
-    path: Path = Path(args.filepath)
-    if not path.exists() or not path.is_file():
-        print(f'Error: file not found: {path}', file=sys.stderr)
-        return 1
-
-    try:
-        text: str = path.read_text(encoding='utf-8')
-    except Exception as exc:
-        print(f'Error reading file {path}: {exc}', file=sys.stderr)
-        return 1
-
-    # Delegate the search to the library function
-    result: dict = find_neighbors_in_text(
+    res = find_neighbors_in_text(
         text=text,
         term1=args.term1,
         term2=args.term2,
         nearness=args.nearness,
+        pre_words=args.pre_words,
+        post_words=args.post_words,
     )
 
-    print(f'found {result["count"]} match(es)')
-    for item in result.get('matches', []):
-        snippet = item.get('snippet', '')
-        print()
-        print(f'- match="{snippet}"')
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
 
+    print(f'count: {res["count"]}')
+    for i, m in enumerate(res['matches'], start=1):
+        print(f'[{i}] {m["snippet"]}')
     return 0
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    raise SystemExit(main())
